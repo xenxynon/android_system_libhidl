@@ -51,6 +51,26 @@ void configureRpcThreadpool(size_t maxThreads, bool callerWillJoin);
 void joinRpcThreadpool();
 
 /**
+ * Sets up the transport for use with (e)poll.
+ *
+ * Note that all currently supported transports can only be polled
+ * from a single thread. When poll() on the returned fd returns,
+ * the caller must call handleTransportPoll() to handle the result.
+ *
+ * @return the file descriptor to be used with (e)poll, or -1 in case of error.
+ */
+int setupTransportPolling();
+
+/**
+ * Handles transport work after poll() returns.
+ *
+ * @param fd returned from setupTransportPolling()
+ *
+ * @return OK when successful
+ */
+status_t handleTransportPoll(int fd);
+
+/**
  * Sets a minimum scheduler policy for all transactions coming into this
  * service.
  *
@@ -77,6 +97,9 @@ bool interfacesEqual(sp<ILeft> left, sp<IRight> right) {
 }
 
 namespace details {
+
+// Return PID on userdebug / eng builds and IServiceManager::PidConstant::NO_PID on user builds.
+int32_t getPidIfSharable();
 
 // cast the interface IParent to IChild.
 // Return nonnull if cast successful.

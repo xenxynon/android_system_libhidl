@@ -330,9 +330,12 @@ sp<IBinder> toBinder(sp<IType> iface) {
         sp<IBinder> sBnObj = wBnObj.promote();
 
         if (sBnObj == nullptr) {
-            auto func = details::gBnConstructorMap.get(myDescriptor, nullptr);
+            auto func = details::getBnConstructorMap().get(myDescriptor, nullptr);
             if (!func) {
-                return nullptr;
+                func = details::gBnConstructorMap.get(myDescriptor, nullptr);
+                if (!func) {
+                    return nullptr;
+                }
             }
 
             sBnObj = sp<IBinder>(func(static_cast<void*>(ifacePtr)));
@@ -368,6 +371,8 @@ sp<IType> fromBinder(const sp<IBinder>& binderIface) {
 
 void configureBinderRpcThreadpool(size_t maxThreads, bool callerWillJoin);
 void joinBinderRpcThreadpool();
+int setupBinderPolling();
+status_t handleBinderPoll();
 
 }  // namespace hardware
 }  // namespace android

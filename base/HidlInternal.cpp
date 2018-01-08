@@ -19,6 +19,8 @@
 #include <hidl/HidlInternal.h>
 
 #include <android-base/logging.h>
+#include <android-base/properties.h>
+#include <android-base/stringprintf.h>
 #include <cutils/properties.h>
 
 #ifdef LIBHIDL_TARGET_DEBUGGABLE
@@ -29,9 +31,10 @@
 #include <regex>
 
 extern "C" __attribute__((weak)) void __sanitizer_cov_dump();
-const char* kSysPropHalCoverage = "hal.coverage.enable";
 const char* kGcovPrefixEnvVar = "GCOV_PREFIX";
+const char* kGcovPrefixOverrideEnvVar = "GCOV_PREFIX_OVERRIDE";
 const char* kGcovPrefixPath = "/data/misc/trace/";
+const char* kSysPropHalCoverage = "hal.coverage.enable";
 #endif
 
 namespace android {
@@ -40,6 +43,21 @@ namespace details {
 
 void logAlwaysFatal(const char* message) {
     LOG(FATAL) << message;
+}
+
+std::string getVndkVersionStr() {
+    static std::string vndkVersion("0");
+    // "0" means the vndkVersion must be initialized with the property value.
+    // Otherwise, return the value.
+    if (vndkVersion == "0") {
+        vndkVersion = android::base::GetProperty("ro.vndk.version", "");
+        if (vndkVersion != "" && vndkVersion != "current") {
+            vndkVersion = "-" + vndkVersion;
+        } else {
+            vndkVersion = "";
+        }
+    }
+    return vndkVersion;
 }
 
 // ----------------------------------------------------------------------
@@ -61,8 +79,11 @@ HidlInstrumentor::HidlInstrumentor(const std::string& package, const std::string
             0);
     }
     if (property_get_bool("ro.vts.coverage", false)) {
-        const std::string gcovPath = kGcovPrefixPath + std::to_string(getpid());
-        setenv(kGcovPrefixEnvVar, gcovPath.c_str(), true /* overwrite */);
+        const char* prefixOverride = getenv(kGcovPrefixOverrideEnvVar);
+        if (prefixOverride == nullptr || strcmp(prefixOverride, "true") != 0) {
+            const std::string gcovPath = kGcovPrefixPath + std::to_string(getpid());
+            setenv(kGcovPrefixEnvVar, gcovPath.c_str(), true /* overwrite */);
+        }
         ::android::add_sysprop_change_callback(
             []() {
                 const bool enableCoverage = property_get_bool(kSysPropHalCoverage, false);
@@ -123,8 +144,10 @@ void HidlInstrumentor::registerInstrumentationCallbacks(
                      "") > 0) {
         instrumentationLibPaths.push_back(instrumentationLibPath);
     } else {
+        static std::string halLibPathVndkSp = android::base::StringPrintf(
+            HAL_LIBRARY_PATH_VNDK_SP_FOR_VERSION, getVndkVersionStr().c_str());
         instrumentationLibPaths.push_back(HAL_LIBRARY_PATH_SYSTEM);
-        instrumentationLibPaths.push_back(HAL_LIBRARY_PATH_VNDK_SP);
+        instrumentationLibPaths.push_back(halLibPathVndkSp);
         instrumentationLibPaths.push_back(HAL_LIBRARY_PATH_VENDOR);
         instrumentationLibPaths.push_back(HAL_LIBRARY_PATH_ODM);
     }

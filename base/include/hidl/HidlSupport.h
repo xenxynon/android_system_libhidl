@@ -173,15 +173,15 @@ private:
 };
 
 // Use NOLINT to suppress missing parentheses warnings around OP.
-#define HIDL_STRING_OPERATOR(OP)                                               \
-    inline bool operator OP(const hidl_string &hs1, const hidl_string &hs2) {  \
-        return strcmp(hs1.c_str(), hs2.c_str()) OP 0;     /* NOLINT */         \
-    }                                                                          \
-    inline bool operator OP(const hidl_string &hs, const char *s) {            \
-        return strcmp(hs.c_str(), s) OP 0;                /* NOLINT */         \
-    }                                                                          \
-    inline bool operator OP(const char *s, const hidl_string &hs) {            \
-        return strcmp(hs.c_str(), s) OP 0;                /* NOLINT */         \
+#define HIDL_STRING_OPERATOR(OP)                                              \
+    inline bool operator OP(const hidl_string& hs1, const hidl_string& hs2) { \
+        return strcmp(hs1.c_str(), hs2.c_str()) OP 0; /* NOLINT */            \
+    }                                                                         \
+    inline bool operator OP(const hidl_string& hs, const char* s) {           \
+        return strcmp(hs.c_str(), s) OP 0; /* NOLINT */                       \
+    }                                                                         \
+    inline bool operator OP(const char* s, const hidl_string& hs) {           \
+        return strcmp(s, hs.c_str()) OP 0; /* NOLINT */                       \
     }
 
 HIDL_STRING_OPERATOR(==)
@@ -295,23 +295,22 @@ private:
 // to support other type of hidl_memory without break the ABI.
 class HidlMemory : public virtual hidl_memory, public virtual ::android::RefBase {
 public:
+    static sp<HidlMemory> getInstance(const hidl_memory& mem);
+
     static sp<HidlMemory> getInstance(hidl_memory&& mem);
 
     static sp<HidlMemory> getInstance(const hidl_string& name, hidl_handle&& handle, uint64_t size);
     // @param fd, shall be opened and points to the resource.
     // @note this method takes the ownership of the fd and will close it in
     //     destructor
+    // @return nullptr in failure with the fd closed
     static sp<HidlMemory> getInstance(const hidl_string& name, int fd, uint64_t size);
 
+    virtual ~HidlMemory();
+
 protected:
-    HidlMemory() : hidl_memory() {}
-    HidlMemory(const hidl_string& name, hidl_handle&& handle, size_t size)
-        : hidl_memory(name, std::move(handle), size) {}
-    ~HidlMemory();
-    HidlMemory& operator=(hidl_memory&& src) {
-        hidl_memory::operator=(src);
-        return *this;
-    }
+    HidlMemory();
+    HidlMemory(const hidl_string& name, hidl_handle&& handle, size_t size);
 };
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -983,6 +982,13 @@ std::string toString(const hidl_array<T, SIZE1, SIZE2, SIZES...> &a) {
     return details::arraySizeToString<SIZE1, SIZE2, SIZES...>()
             + details::toString(details::const_accessor<T, SIZE1, SIZE2, SIZES...>(a.data()));
 }
+
+/**
+ * Every HIDL generated enum generates an implementation of this function.
+ * E.x.: for(const auto v : hidl_enum_iterator<Enum>) { ... }
+ */
+template <typename>
+struct hidl_enum_iterator;
 
 }  // namespace hardware
 }  // namespace android
