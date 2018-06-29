@@ -18,6 +18,8 @@
 
 #include <hidl/HidlBinderSupport.h>
 
+#include <InternalStatic.h>  // TODO(b/69122224): remove this include, for getOrCreateCachedBinder
+
 // C includes
 #include <inttypes.h>
 #include <unistd.h>
@@ -206,6 +208,41 @@ status_t writeToParcel(const Status &s, Parcel* parcel) {
     return status;
 }
 
+sp<IBinder> getOrCreateCachedBinder(::android::hidl::base::V1_0::IBase* ifacePtr) {
+    LOG_ALWAYS_FATAL_IF(ifacePtr->isRemote(), "%s does not have a way to construct remote binders",
+                        __func__);
+
+    std::string descriptor = details::getDescriptor(ifacePtr);
+    if (descriptor.empty()) {
+        // interfaceDescriptor fails
+        return nullptr;
+    }
+
+    // for get + set
+    std::unique_lock<std::mutex> _lock = details::gBnMap.lock();
+
+    wp<BHwBinder> wBnObj = details::gBnMap.getLocked(ifacePtr, nullptr);
+    sp<IBinder> sBnObj = wBnObj.promote();
+
+    if (sBnObj == nullptr) {
+        auto func = details::getBnConstructorMap().get(descriptor, nullptr);
+        if (!func) {
+            // TODO(b/69122224): remove this static variable when prebuilts updated
+            func = details::gBnConstructorMap.get(descriptor, nullptr);
+        }
+        LOG_ALWAYS_FATAL_IF(func == nullptr, "%s gBnConstructorMap returned null for %s", __func__,
+                            descriptor.c_str());
+
+        sBnObj = sp<IBinder>(func(static_cast<void*>(ifacePtr)));
+        LOG_ALWAYS_FATAL_IF(sBnObj == nullptr, "%s Bn constructor function returned null for %s",
+                            __func__, descriptor.c_str());
+
+        details::gBnMap.setLocked(ifacePtr, static_cast<BHwBinder*>(sBnObj.get()));
+    }
+
+    return sBnObj;
+}
+
 static bool gThreadPoolConfigured = false;
 
 void configureBinderRpcThreadpool(size_t maxThreads, bool callerWillJoin) {
@@ -217,10 +254,8 @@ void configureBinderRpcThreadpool(size_t maxThreads, bool callerWillJoin) {
 }
 
 void joinBinderRpcThreadpool() {
-    if (!gThreadPoolConfigured) {
-        ALOGE("HIDL joinRpcThreadpool without calling configureRpcThreadPool.");
-    }
-
+    LOG_ALWAYS_FATAL_IF(!gThreadPoolConfigured,
+                        "HIDL joinRpcThreadpool without calling configureRpcThreadPool.");
     IPCThreadState::self()->joinThreadPool();
 }
 
@@ -228,9 +263,7 @@ int setupBinderPolling() {
     int fd;
     int err = IPCThreadState::self()->setupPolling(&fd);
 
-    if (err != OK) {
-        ALOGE("Failed to setup binder polling: %d (%s)", err, strerror(err));
-    }
+    LOG_ALWAYS_FATAL_IF(err != OK, "Failed to setup binder polling: %d (%s)", err, strerror(err));
 
     return err == OK ? fd : -1;
 }
