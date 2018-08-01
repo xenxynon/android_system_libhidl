@@ -40,18 +40,22 @@ namespace android {
 namespace hidl {
 namespace memory {
 namespace V1_0 {
-    struct IMemory;
-}; // namespace V1_0
-}; // namespace manager
-}; // namespace hidl
+
+struct IMemory;
+
+}  // namespace V1_0
+}  // namespace memory
+}  // namespace hidl
 
 namespace hidl {
 namespace base {
 namespace V1_0 {
-    struct IBase;
-}; // namespace V1_0
-}; // namespace base
-}; // namespace hidl
+
+struct IBase;
+
+}  // namespace V1_0
+}  // namespace base
+}  // namespace hidl
 
 namespace hardware {
 
@@ -155,6 +159,8 @@ struct hidl_string {
     // Reference an external char array. Ownership is _not_ transferred.
     // Caller is responsible for ensuring that underlying memory is valid
     // for the lifetime of this hidl_string.
+    //
+    // size == strlen(data)
     void setToExternal(const char *data, size_t size);
 
     // offsetof(hidl_string, mBuffer) exposed since mBuffer is private.
@@ -839,6 +845,10 @@ public:
         return (mMajor == other.get_major() && mMinor == other.get_minor());
     }
 
+    bool operator!=(const hidl_version& other) const {
+        return !(*this == other);
+    }
+
     bool operator<(const hidl_version& other) const {
         return (mMajor < other.get_major() ||
                 (mMajor == other.get_major() && mMinor < other.get_minor()));
@@ -985,10 +995,17 @@ std::string toString(const hidl_array<T, SIZE1, SIZE2, SIZES...> &a) {
 
 /**
  * Every HIDL generated enum generates an implementation of this function.
- * E.x.: for(const auto v : hidl_enum_iterator<Enum>) { ... }
+ * E.x.: for(const auto v : hidl_enum_range<Enum>) { ... }
  */
-template <typename>
-struct hidl_enum_iterator;
+template <typename T, typename = std::enable_if_t<std::is_enum<T>::value>>
+struct hidl_enum_range;
+
+template <typename T, typename = std::enable_if_t<std::is_enum<T>::value>>
+struct hidl_enum_iterator {
+    static_assert(!std::is_enum<T>::value,
+                  "b/78573628: hidl_enum_iterator was renamed to hidl_enum_range because it is not "
+                  "actually an iterator. Please use that type instead.");
+};
 
 /**
  * Bitfields in HIDL are the underlying type of the enumeration.

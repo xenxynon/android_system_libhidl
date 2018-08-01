@@ -39,11 +39,13 @@
 #include <android-base/stringprintf.h>
 #include <hwbinder/IPCThreadState.h>
 #include <hwbinder/Parcel.h>
+#if !defined(__ANDROID_RECOVERY__)
 #include <vndksupport/linker.h>
+#endif
 
-#include <android/hidl/manager/1.1/IServiceManager.h>
-#include <android/hidl/manager/1.1/BpHwServiceManager.h>
-#include <android/hidl/manager/1.1/BnHwServiceManager.h>
+#include <android/hidl/manager/1.2/BnHwServiceManager.h>
+#include <android/hidl/manager/1.2/BpHwServiceManager.h>
+#include <android/hidl/manager/1.2/IServiceManager.h>
 
 #define RE_COMPONENT    "[a-zA-Z_][a-zA-Z_0-9]*"
 #define RE_PATH         RE_COMPONENT "(?:[.]" RE_COMPONENT ")*"
@@ -53,19 +55,19 @@ using android::base::WaitForProperty;
 
 using IServiceManager1_0 = android::hidl::manager::V1_0::IServiceManager;
 using IServiceManager1_1 = android::hidl::manager::V1_1::IServiceManager;
+using IServiceManager1_2 = android::hidl::manager::V1_2::IServiceManager;
 using android::hidl::manager::V1_0::IServiceNotification;
-using android::hidl::manager::V1_1::BpHwServiceManager;
-using android::hidl::manager::V1_1::BnHwServiceManager;
 
 namespace android {
 namespace hardware {
 
-namespace details {
-extern Mutex gDefaultServiceManagerLock;
-extern sp<android::hidl::manager::V1_1::IServiceManager> gDefaultServiceManager;
-}  // namespace details
-
 static const char* kHwServicemanagerReadyProperty = "hwservicemanager.ready";
+
+#if defined(__ANDROID_RECOVERY__)
+static constexpr bool kIsRecovery = true;
+#else
+static constexpr bool kIsRecovery = false;
+#endif
 
 void waitForHwServiceManager() {
     using std::literals::chrono_literals::operator""s;
@@ -163,13 +165,22 @@ void onRegistration(const std::string &packageName,
 }  // details
 
 sp<IServiceManager1_0> defaultServiceManager() {
-    return defaultServiceManager1_1();
+    return defaultServiceManager1_2();
 }
 sp<IServiceManager1_1> defaultServiceManager1_1() {
+    return defaultServiceManager1_2();
+}
+sp<IServiceManager1_2> defaultServiceManager1_2() {
+    using android::hidl::manager::V1_2::BnHwServiceManager;
+    using android::hidl::manager::V1_2::BpHwServiceManager;
+
+    static std::mutex gDefaultServiceManagerLock;
+    static sp<IServiceManager1_2> gDefaultServiceManager;
+
     {
-        AutoMutex _l(details::gDefaultServiceManagerLock);
-        if (details::gDefaultServiceManager != nullptr) {
-            return details::gDefaultServiceManager;
+        std::lock_guard<std::mutex> _l(gDefaultServiceManagerLock);
+        if (gDefaultServiceManager != nullptr) {
+            return gDefaultServiceManager;
         }
 
         if (access("/dev/hwbinder", F_OK|R_OK|W_OK) != 0) {
@@ -180,18 +191,18 @@ sp<IServiceManager1_1> defaultServiceManager1_1() {
 
         waitForHwServiceManager();
 
-        while (details::gDefaultServiceManager == nullptr) {
-            details::gDefaultServiceManager =
-                    fromBinder<IServiceManager1_1, BpHwServiceManager, BnHwServiceManager>(
-                        ProcessState::self()->getContextObject(nullptr));
-            if (details::gDefaultServiceManager == nullptr) {
+        while (gDefaultServiceManager == nullptr) {
+            gDefaultServiceManager =
+                fromBinder<IServiceManager1_2, BpHwServiceManager, BnHwServiceManager>(
+                    ProcessState::self()->getContextObject(nullptr));
+            if (gDefaultServiceManager == nullptr) {
                 LOG(ERROR) << "Waited for hwservicemanager, but got nullptr.";
                 sleep(1);
             }
         }
     }
 
-    return details::gDefaultServiceManager;
+    return gDefaultServiceManager;
 }
 
 std::vector<std::string> search(const std::string &path,
@@ -226,6 +237,11 @@ bool matchPackageName(const std::string& lib, std::string* matchedName, std::str
 }
 
 static void registerReference(const hidl_string &interfaceName, const hidl_string &instanceName) {
+    if (kIsRecovery) {
+        // No hwservicemanager in recovery.
+        return;
+    }
+
     sp<IServiceManager1_0> binderizedManager = defaultServiceManager();
     if (binderizedManager == nullptr) {
         LOG(WARNING) << "Could not registerReference for "
@@ -341,10 +357,12 @@ struct PassthroughServiceManager : IServiceManager1_1 {
             for (const std::string &lib : libs) {
                 const std::string fullPath = path + lib;
 
-                if (path == HAL_LIBRARY_PATH_SYSTEM) {
+                if (kIsRecovery || path == HAL_LIBRARY_PATH_SYSTEM) {
                     handle = dlopen(fullPath.c_str(), dlMode);
                 } else {
+#if !defined(__ANDROID_RECOVERY__)
                     handle = android_load_sphal_library(fullPath.c_str(), dlMode);
+#endif
                 }
 
                 if (handle == nullptr) {
@@ -563,7 +581,7 @@ struct Waiter : IServiceNotification {
         return Void();
     }
 
-    void wait() {
+    void wait(bool timeout) {
         using std::literals::chrono_literals::operator""s;
 
         if (!mRegisteredForNotifications) {
@@ -574,7 +592,7 @@ struct Waiter : IServiceNotification {
         }
 
         std::unique_lock<std::mutex> lock(mMutex);
-        while(true) {
+        do {
             mCondition.wait_for(lock, 1s, [this]{
                 return mRegistered;
             });
@@ -583,9 +601,8 @@ struct Waiter : IServiceNotification {
                 break;
             }
 
-            LOG(WARNING) << "Waited one second for " << mInterfaceName << "/" << mInstanceName
-                         << ". Waiting another...";
-        }
+            LOG(WARNING) << "Waited one second for " << mInterfaceName << "/" << mInstanceName;
+        } while (!timeout);
     }
 
     // Be careful when using this; after calling reset(), you must always try to retrieve
@@ -626,7 +643,7 @@ struct Waiter : IServiceNotification {
 void waitForHwService(
         const std::string &interface, const std::string &instanceName) {
     sp<Waiter> waiter = new Waiter(interface, instanceName, defaultServiceManager1_1());
-    waiter->wait();
+    waiter->wait(false /* timeout */);
     waiter->done();
 }
 
@@ -669,20 +686,30 @@ sp<::android::hidl::base::V1_0::IBase> getRawServiceInternal(const std::string& 
     using ::android::hidl::manager::V1_0::IServiceManager;
     sp<Waiter> waiter;
 
-    const sp<IServiceManager1_1> sm = defaultServiceManager1_1();
-    if (sm == nullptr) {
-        ALOGE("getService: defaultServiceManager() is null");
-        return nullptr;
+    sp<IServiceManager1_1> sm;
+    Transport transport = Transport::EMPTY;
+    if (kIsRecovery) {
+        // TODO(b/80132328): Should check manifest in recovery as well.
+        transport = Transport::PASSTHROUGH;
+        // No hwbinder HALs in recovery.
+        getStub = true;
+    } else {
+        sm = defaultServiceManager1_1();
+        if (sm == nullptr) {
+            ALOGE("getService: defaultServiceManager() is null");
+            return nullptr;
+        }
+
+        Return<Transport> transportRet = sm->getTransport(descriptor, instance);
+
+        if (!transportRet.isOk()) {
+            ALOGE("getService: defaultServiceManager()->getTransport returns %s",
+                  transportRet.description().c_str());
+            return nullptr;
+        }
+        transport = transportRet;
     }
 
-    Return<Transport> transportRet = sm->getTransport(descriptor, instance);
-
-    if (!transportRet.isOk()) {
-        ALOGE("getService: defaultServiceManager()->getTransport returns %s",
-              transportRet.description().c_str());
-        return nullptr;
-    }
-    Transport transport = transportRet;
     const bool vintfHwbinder = (transport == Transport::HWBINDER);
     const bool vintfPassthru = (transport == Transport::PASSTHROUGH);
 
@@ -736,7 +763,7 @@ sp<::android::hidl::base::V1_0::IBase> getRawServiceInternal(const std::string& 
 
         if (waiter != nullptr) {
             ALOGI("getService: Trying again for %s/%s...", descriptor.c_str(), instance.c_str());
-            waiter->wait();
+            waiter->wait(true /* timeout */);
         }
     }
 
@@ -758,7 +785,7 @@ sp<::android::hidl::base::V1_0::IBase> getRawServiceInternal(const std::string& 
     return nullptr;
 }
 
-}; // namespace details
+} // namespace details
 
-}; // namespace hardware
-}; // namespace android
+} // namespace hardware
+} // namespace android

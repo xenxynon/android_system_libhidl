@@ -18,7 +18,10 @@
 
 #include <hidl/HidlBinderSupport.h>
 
+#include <InternalStatic.h>  // TODO(b/69122224): remove this include, for getOrCreateCachedBinder
+
 // C includes
+#include <inttypes.h>
 #include <unistd.h>
 
 // C++ includes
@@ -64,6 +67,15 @@ status_t readEmbeddedFromParcel(const hidl_memory& memory,
                 parcel,
                 parentHandle,
                 parentOffset + hidl_memory::kOffsetOfName);
+    }
+
+    // hidl_memory's size is stored in uint64_t, but mapMemory's mmap will map
+    // size in size_t. If size is over SIZE_MAX, mapMemory could succeed
+    // but the mapped memory's actual size will be smaller than the reported size.
+    if (memory.size() > SIZE_MAX) {
+        ALOGE("Cannot use memory with %" PRId64 " bytes because it is too large.", memory.size());
+        android_errorWriteLog(0x534e4554, "79376389");
+        return BAD_VALUE;
     }
 
     return _hidl_err;
@@ -196,11 +208,54 @@ status_t writeToParcel(const Status &s, Parcel* parcel) {
     return status;
 }
 
+sp<IBinder> getOrCreateCachedBinder(::android::hidl::base::V1_0::IBase* ifacePtr) {
+    LOG_ALWAYS_FATAL_IF(ifacePtr->isRemote(), "%s does not have a way to construct remote binders",
+                        __func__);
+
+    std::string descriptor = details::getDescriptor(ifacePtr);
+    if (descriptor.empty()) {
+        // interfaceDescriptor fails
+        return nullptr;
+    }
+
+    // for get + set
+    std::unique_lock<std::mutex> _lock = details::gBnMap.lock();
+
+    wp<BHwBinder> wBnObj = details::gBnMap.getLocked(ifacePtr, nullptr);
+    sp<IBinder> sBnObj = wBnObj.promote();
+
+    if (sBnObj == nullptr) {
+        auto func = details::getBnConstructorMap().get(descriptor, nullptr);
+        if (!func) {
+            // TODO(b/69122224): remove this static variable when prebuilts updated
+            func = details::gBnConstructorMap.get(descriptor, nullptr);
+        }
+        LOG_ALWAYS_FATAL_IF(func == nullptr, "%s gBnConstructorMap returned null for %s", __func__,
+                            descriptor.c_str());
+
+        sBnObj = sp<IBinder>(func(static_cast<void*>(ifacePtr)));
+        LOG_ALWAYS_FATAL_IF(sBnObj == nullptr, "%s Bn constructor function returned null for %s",
+                            __func__, descriptor.c_str());
+
+        details::gBnMap.setLocked(ifacePtr, static_cast<BHwBinder*>(sBnObj.get()));
+    }
+
+    return sBnObj;
+}
+
+static bool gThreadPoolConfigured = false;
+
 void configureBinderRpcThreadpool(size_t maxThreads, bool callerWillJoin) {
-    ProcessState::self()->setThreadPoolConfiguration(maxThreads, callerWillJoin /*callerJoinsPool*/);
+    status_t ret = ProcessState::self()->setThreadPoolConfiguration(
+        maxThreads, callerWillJoin /*callerJoinsPool*/);
+    LOG_ALWAYS_FATAL_IF(ret != OK, "Could not setThreadPoolConfiguration: %d", ret);
+
+    gThreadPoolConfigured = true;
 }
 
 void joinBinderRpcThreadpool() {
+    LOG_ALWAYS_FATAL_IF(!gThreadPoolConfigured,
+                        "HIDL joinRpcThreadpool without calling configureRpcThreadPool.");
     IPCThreadState::self()->joinThreadPool();
 }
 
@@ -208,15 +263,17 @@ int setupBinderPolling() {
     int fd;
     int err = IPCThreadState::self()->setupPolling(&fd);
 
-    if (err != OK) {
-        ALOGE("Failed to setup binder polling: %d (%s)", err, strerror(err));
-    }
+    LOG_ALWAYS_FATAL_IF(err != OK, "Failed to setup binder polling: %d (%s)", err, strerror(err));
 
     return err == OK ? fd : -1;
 }
 
 status_t handleBinderPoll() {
     return IPCThreadState::self()->handlePolledCommands();
+}
+
+void addPostCommandTask(const std::function<void(void)> task) {
+    IPCThreadState::self()->addPostCommandTask(task);
 }
 
 }  // namespace hardware
