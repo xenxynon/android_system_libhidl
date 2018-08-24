@@ -13,9 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <hidl/HidlTransportSupport.h>
 #include <hidl/HidlBinderSupport.h>
+#include <hidl/HidlTransportSupport.h>
+#include <hidl/Static.h>
 
+#include <android-base/logging.h>
 #include <android/hidl/manager/1.0/IServiceManager.h>
 
 namespace android {
@@ -41,24 +43,40 @@ status_t handleTransportPoll(int /*fd*/) {
 bool setMinSchedulerPolicy(const sp<::android::hidl::base::V1_0::IBase>& service,
                            int policy, int priority) {
     if (service->isRemote()) {
-        ALOGE("Can't set scheduler policy on remote service.");
+        LOG(ERROR) << "Can't set scheduler policy on remote service.";
         return false;
     }
 
     if (policy != SCHED_NORMAL && policy != SCHED_FIFO && policy != SCHED_RR) {
-        ALOGE("Invalid scheduler policy %d", policy);
+        LOG(ERROR) << "Invalid scheduler policy " << policy;
         return false;
     }
 
     if (policy == SCHED_NORMAL && (priority < -20 || priority > 19)) {
-        ALOGE("Invalid priority for SCHED_NORMAL: %d", priority);
+        LOG(ERROR) << "Invalid priority for SCHED_NORMAL: " << priority;
         return false;
     } else if (priority < 1 || priority > 99) {
-        ALOGE("Invalid priority for real-time policy: %d", priority);
+        LOG(ERROR) << "Invalid priority for real-time policy: " << priority;
         return false;
     }
 
-    details::gServicePrioMap.set(service, { policy, priority });
+    // Due to ABI considerations, IBase cannot have a destructor to clean this up.
+    // So, because this API is so infrequently used, (expected to be usually only
+    // one time for a process, but it can be more), we are cleaning it up here.
+    // TODO(b/37794345): if ever we update the HIDL ABI for launches in an Android
+    // release in the meta-version sense, we should remove this.
+    std::unique_lock<std::mutex> lock = details::gServicePrioMap.lock();
+
+    std::vector<wp<::android::hidl::base::V1_0::IBase>> toDelete;
+    for (const auto& kv : details::gServicePrioMap) {
+        if (kv.first.promote() == nullptr) {
+            toDelete.push_back(kv.first);
+        }
+    }
+    for (const auto& k : toDelete) {
+        details::gServicePrioMap.eraseLocked(k);
+    }
+    details::gServicePrioMap.setLocked(service, {policy, priority});
 
     return true;
 }
