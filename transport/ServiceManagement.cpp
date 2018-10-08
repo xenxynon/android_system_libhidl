@@ -632,7 +632,7 @@ struct Waiter : IServiceNotification {
    private:
     const std::string mInterfaceName;
     const std::string mInstanceName;
-    const sp<IServiceManager1_1>& mSm;
+    sp<IServiceManager1_1> mSm;
     std::mutex mMutex;
     std::condition_variable mCondition;
     bool mRegistered = false;
@@ -689,10 +689,7 @@ sp<::android::hidl::base::V1_0::IBase> getRawServiceInternal(const std::string& 
     sp<IServiceManager1_1> sm;
     Transport transport = Transport::EMPTY;
     if (kIsRecovery) {
-        // TODO(b/80132328): Should check manifest in recovery as well.
         transport = Transport::PASSTHROUGH;
-        // No hwbinder HALs in recovery.
-        getStub = true;
     } else {
         sm = defaultServiceManager1_1();
         if (sm == nullptr) {
