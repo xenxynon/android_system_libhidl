@@ -33,10 +33,14 @@
 #include <hidl/HidlTransportUtils.h>
 #include <hidl/ServiceManagement.h>
 #include <hidl/Status.h>
+#include <utils/SystemClock.h>
 
+#include <android-base/file.h>
 #include <android-base/logging.h>
+#include <android-base/parseint.h>
 #include <android-base/properties.h>
 #include <android-base/stringprintf.h>
+#include <android-base/strings.h>
 #include <hwbinder/IPCThreadState.h>
 #include <hwbinder/Parcel.h>
 #if !defined(__ANDROID_RECOVERY__)
@@ -53,10 +57,11 @@ static const std::regex gLibraryFileNamePattern("(" RE_PATH "@[0-9]+[.][0-9]+)-i
 
 using android::base::WaitForProperty;
 
+using ::android::hidl::base::V1_0::IBase;
 using IServiceManager1_0 = android::hidl::manager::V1_0::IServiceManager;
 using IServiceManager1_1 = android::hidl::manager::V1_1::IServiceManager;
 using IServiceManager1_2 = android::hidl::manager::V1_2::IServiceManager;
-using android::hidl::manager::V1_0::IServiceNotification;
+using ::android::hidl::manager::V1_0::IServiceNotification;
 
 namespace android {
 namespace hardware {
@@ -69,7 +74,7 @@ static constexpr bool kIsRecovery = true;
 static constexpr bool kIsRecovery = false;
 #endif
 
-void waitForHwServiceManager() {
+static void waitForHwServiceManager() {
     using std::literals::chrono_literals::operator""s;
 
     while (!WaitForProperty(kHwServicemanagerReadyProperty, "true", 1s)) {
@@ -77,17 +82,7 @@ void waitForHwServiceManager() {
     }
 }
 
-bool endsWith(const std::string &in, const std::string &suffix) {
-    return in.size() >= suffix.size() &&
-           in.substr(in.size() - suffix.size()) == suffix;
-}
-
-bool startsWith(const std::string &in, const std::string &prefix) {
-    return in.size() >= prefix.size() &&
-           in.substr(0, prefix.size()) == prefix;
-}
-
-std::string binaryName() {
+static std::string binaryName() {
     std::ifstream ifs("/proc/self/cmdline");
     std::string cmdline;
     if (!ifs.is_open()) {
@@ -103,27 +98,27 @@ std::string binaryName() {
     return cmdline;
 }
 
-std::string packageWithoutVersion(const std::string& packageAndVersion) {
+static std::string packageWithoutVersion(const std::string& packageAndVersion) {
     size_t at = packageAndVersion.find('@');
     if (at == std::string::npos) return packageAndVersion;
     return packageAndVersion.substr(0, at);
 }
 
-void tryShortenProcessName(const std::string& packageAndVersion) {
+static void tryShortenProcessName(const std::string& descriptor) {
     const static std::string kTasks = "/proc/self/task/";
 
     // make sure that this binary name is in the same package
     std::string processName = binaryName();
 
     // e.x. android.hardware.foo is this package
-    if (!startsWith(packageWithoutVersion(processName), packageWithoutVersion(packageAndVersion))) {
+    if (!base::StartsWith(packageWithoutVersion(processName), packageWithoutVersion(descriptor))) {
         return;
     }
 
-    // e.x. android.hardware.module.foo@1.2 -> foo@1.2
-    size_t lastDot = packageAndVersion.rfind('.');
+    // e.x. android.hardware.module.foo@1.2::IFoo -> foo@1.2
+    size_t lastDot = descriptor.rfind('.');
     if (lastDot == std::string::npos) return;
-    size_t secondDot = packageAndVersion.rfind('.', lastDot - 1);
+    size_t secondDot = descriptor.rfind('.', lastDot - 1);
     if (secondDot == std::string::npos) return;
 
     std::string newName = processName.substr(secondDot + 1, std::string::npos);
@@ -147,7 +142,7 @@ void tryShortenProcessName(const std::string& packageAndVersion) {
         fs >> oldComm;
 
         // don't rename if it already has an explicit name
-        if (startsWith(packageAndVersion, oldComm)) {
+        if (base::StartsWith(descriptor, oldComm)) {
             fs.seekg(0, fs.beg);
             fs << newName;
         }
@@ -156,10 +151,48 @@ void tryShortenProcessName(const std::string& packageAndVersion) {
 
 namespace details {
 
-void onRegistration(const std::string &packageName,
-                    const std::string& /* interfaceName */,
-                    const std::string& /* instanceName */) {
-    tryShortenProcessName(packageName);
+/*
+ * Returns the age of the current process by reading /proc/self/stat and comparing starttime to the
+ * current time. This is useful for measuring how long it took a HAL to register itself.
+ */
+static long getProcessAgeMs() {
+    constexpr const int PROCFS_STAT_STARTTIME_INDEX = 21;
+    std::string content;
+    android::base::ReadFileToString("/proc/self/stat", &content, false);
+    auto stats = android::base::Split(content, " ");
+    if (stats.size() <= PROCFS_STAT_STARTTIME_INDEX) {
+        LOG(INFO) << "Could not read starttime from /proc/self/stat";
+        return -1;
+    }
+    const std::string& startTimeString = stats[PROCFS_STAT_STARTTIME_INDEX];
+    static const int64_t ticksPerSecond = sysconf(_SC_CLK_TCK);
+    const int64_t uptime = android::uptimeMillis();
+
+    unsigned long long startTimeInClockTicks = 0;
+    if (android::base::ParseUint(startTimeString, &startTimeInClockTicks)) {
+        long startTimeMs = 1000ULL * startTimeInClockTicks / ticksPerSecond;
+        return uptime - startTimeMs;
+    }
+    return -1;
+}
+
+static void onRegistrationImpl(const std::string& descriptor, const std::string& instanceName) {
+    long halStartDelay = getProcessAgeMs();
+    if (halStartDelay >= 0) {
+        // The "start delay" printed here is an estimate of how long it took the HAL to go from
+        // process creation to registering itself as a HAL.  Actual start time could be longer
+        // because the process might not have joined the threadpool yet, so it might not be ready to
+        // process transactions.
+        LOG(INFO) << "Registered " << descriptor << "/" << instanceName << " (start delay of "
+                  << halStartDelay << "ms)";
+    }
+
+    tryShortenProcessName(descriptor);
+}
+
+void onRegistration(const std::string& packageName, const std::string& interfaceName,
+                    const std::string& instanceName) {
+    return onRegistrationImpl(packageName + "::" + interfaceName, instanceName);
 }
 
 }  // details
@@ -217,8 +250,7 @@ std::vector<std::string> search(const std::string &path,
     while ((dp = readdir(dir.get())) != nullptr) {
         std::string name = dp->d_name;
 
-        if (startsWith(name, prefix) &&
-                endsWith(name, suffix)) {
+        if (base::StartsWith(name, prefix) && base::EndsWith(name, suffix)) {
             results.push_back(name);
         }
     }
@@ -325,8 +357,12 @@ struct PassthroughServiceManager : IServiceManager1_1 {
 
         static std::string halLibPathVndkSp = android::base::StringPrintf(
             HAL_LIBRARY_PATH_VNDK_SP_FOR_VERSION, details::getVndkVersionStr().c_str());
-        std::vector<std::string> paths = {HAL_LIBRARY_PATH_ODM, HAL_LIBRARY_PATH_VENDOR,
-                                          halLibPathVndkSp, HAL_LIBRARY_PATH_SYSTEM};
+        std::vector<std::string> paths = {
+            HAL_LIBRARY_PATH_ODM, HAL_LIBRARY_PATH_VENDOR, halLibPathVndkSp,
+#ifndef __ANDROID_VNDK__
+            HAL_LIBRARY_PATH_SYSTEM,
+#endif
+        };
 
 #ifdef LIBHIDL_TARGET_DEBUGGABLE
         const char* env = std::getenv("TREBLE_TESTING_OVERRIDE");
@@ -454,11 +490,21 @@ struct PassthroughServiceManager : IServiceManager1_1 {
             HAL_LIBRARY_PATH_VNDK_SP_32BIT_FOR_VERSION, details::getVndkVersionStr().c_str());
         static std::vector<std::pair<Arch, std::vector<const char*>>> sAllPaths{
             {Arch::IS_64BIT,
-             {HAL_LIBRARY_PATH_ODM_64BIT, HAL_LIBRARY_PATH_VENDOR_64BIT,
-              halLibPathVndkSp64.c_str(), HAL_LIBRARY_PATH_SYSTEM_64BIT}},
+             {
+                 HAL_LIBRARY_PATH_ODM_64BIT, HAL_LIBRARY_PATH_VENDOR_64BIT,
+                 halLibPathVndkSp64.c_str(),
+#ifndef __ANDROID_VNDK__
+                 HAL_LIBRARY_PATH_SYSTEM_64BIT,
+#endif
+             }},
             {Arch::IS_32BIT,
-             {HAL_LIBRARY_PATH_ODM_32BIT, HAL_LIBRARY_PATH_VENDOR_32BIT,
-              halLibPathVndkSp32.c_str(), HAL_LIBRARY_PATH_SYSTEM_32BIT}}};
+             {
+                 HAL_LIBRARY_PATH_ODM_32BIT, HAL_LIBRARY_PATH_VENDOR_32BIT,
+                 halLibPathVndkSp32.c_str(),
+#ifndef __ANDROID_VNDK__
+                 HAL_LIBRARY_PATH_SYSTEM_32BIT,
+#endif
+             }}};
         std::map<std::string, InstanceDebugInfo> map;
         for (const auto &pair : sAllPaths) {
             Arch arch = pair.first;
@@ -682,7 +728,6 @@ sp<::android::hidl::base::V1_0::IBase> getRawServiceInternal(const std::string& 
                                                              const std::string& instance,
                                                              bool retry, bool getStub) {
     using Transport = ::android::hidl::manager::V1_0::IServiceManager::Transport;
-    using ::android::hidl::base::V1_0::IBase;
     using ::android::hidl::manager::V1_0::IServiceManager;
     sp<Waiter> waiter;
 
@@ -780,6 +825,32 @@ sp<::android::hidl::base::V1_0::IBase> getRawServiceInternal(const std::string& 
     }
 
     return nullptr;
+}
+
+status_t registerAsServiceInternal(const sp<IBase>& service, const std::string& name) {
+    if (service == nullptr) {
+        return UNEXPECTED_NULL;
+    }
+
+    sp<IServiceManager1_2> sm = defaultServiceManager1_2();
+    if (sm == nullptr) {
+        return INVALID_OPERATION;
+    }
+
+    bool registered = false;
+    Return<void> ret = service->interfaceChain([&](const auto& chain) {
+        registered = sm->addWithChain(name.c_str(), service, chain).withDefault(false);
+    });
+
+    if (!ret.isOk()) {
+        LOG(ERROR) << "Could not retrieve interface chain: " << ret.description();
+    }
+
+    if (registered) {
+        onRegistrationImpl(getDescriptor(service.get()), name);
+    }
+
+    return registered ? OK : UNKNOWN_ERROR;
 }
 
 } // namespace details
