@@ -326,11 +326,15 @@ protected:
 
 template<typename T>
 struct hidl_vec {
-    hidl_vec()
-        : mBuffer(nullptr),
-          mSize(0),
-          mOwnsBuffer(true) {
+    hidl_vec() {
         static_assert(hidl_vec<T>::kOffsetOfBuffer == 0, "wrong offset");
+
+        memset(this, 0, sizeof(*this));
+        // mSize is 0
+        // mBuffer is nullptr
+
+        // this is for consistency with the original implementation
+        mOwnsBuffer = true;
     }
 
     // Note, does not initialize primitive types.
@@ -340,8 +344,7 @@ struct hidl_vec {
         *this = other;
     }
 
-    hidl_vec(hidl_vec<T> &&other) noexcept
-    : mOwnsBuffer(false) {
+    hidl_vec(hidl_vec<T> &&other) noexcept : hidl_vec() {
         *this = std::move(other);
     }
 
@@ -355,7 +358,7 @@ struct hidl_vec {
               typename = typename std::enable_if<std::is_convertible<
                   typename std::iterator_traits<InputIterator>::iterator_category,
                   std::input_iterator_tag>::value>::type>
-    hidl_vec(InputIterator first, InputIterator last) : mOwnsBuffer(true) {
+    hidl_vec(InputIterator first, InputIterator last) : hidl_vec() {
         auto size = std::distance(first, last);
         if (size > static_cast<int64_t>(UINT32_MAX)) {
             details::logAlwaysFatal("hidl_vec can't hold more than 2^32 elements.");
@@ -364,7 +367,8 @@ struct hidl_vec {
             details::logAlwaysFatal("size can't be negative.");
         }
         mSize = static_cast<uint32_t>(size);
-        mBuffer = new T[mSize];
+        mBuffer = new T[mSize]();
+        mOwnsBuffer = true;
 
         size_t idx = 0;
         for (; first != last; ++first) {
@@ -449,7 +453,7 @@ struct hidl_vec {
             delete[] mBuffer;
         }
         mSize = static_cast<uint32_t>(list.size());
-        mBuffer = new T[mSize];
+        mBuffer = new T[mSize]();
         mOwnsBuffer = true;
 
         size_t idx = 0;
@@ -503,7 +507,7 @@ struct hidl_vec {
         if (size > UINT32_MAX) {
             details::logAlwaysFatal("hidl_vec can't hold more than 2^32 elements.");
         }
-        T *newBuffer = new T[size];
+        T* newBuffer = new T[size]();
 
         for (size_t i = 0; i < std::min(static_cast<uint32_t>(size), mSize); ++i) {
             newBuffer[i] = mBuffer[i];
@@ -579,7 +583,7 @@ private:
         mSize = static_cast<uint32_t>(size);
         mOwnsBuffer = true;
         if (mSize > 0) {
-            mBuffer = new T[size];
+            mBuffer = new T[size]();
             for (size_t i = 0; i < size; ++i) {
                 mBuffer[i] = data[i];
             }
@@ -849,7 +853,9 @@ private:
 // Version functions
 struct hidl_version {
 public:
-    constexpr hidl_version(uint16_t major, uint16_t minor) : mMajor(major), mMinor(minor) {}
+    constexpr hidl_version(uint16_t major, uint16_t minor) : mMajor(major), mMinor(minor) {
+        static_assert(sizeof(*this) == 4, "wrong size");
+    }
 
     bool operator==(const hidl_version& other) const {
         return (mMajor == other.get_major() && mMinor == other.get_minor());
