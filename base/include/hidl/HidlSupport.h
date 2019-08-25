@@ -517,7 +517,7 @@ struct hidl_vec {
         T* newBuffer = new T[size]();
 
         for (size_t i = 0; i < std::min(static_cast<uint32_t>(size), mSize); ++i) {
-            newBuffer[i] = mBuffer[i];
+            newBuffer[i] = std::move(mBuffer[i]);
         }
 
         if (mOwnsBuffer) {
@@ -578,8 +578,11 @@ public:
     iterator end() { return data()+mSize; }
     const_iterator begin() const { return data(); }
     const_iterator end() const { return data()+mSize; }
+    iterator find(const T& v) { return std::find(begin(), end(), v); }
+    const_iterator find(const T& v) const { return std::find(begin(), end(), v); }
+    bool contains(const T& v) const { return find(v) != end(); }
 
-private:
+  private:
     details::hidl_pointer<T> mBuffer;
     uint32_t mSize;
     bool mOwnsBuffer;
@@ -739,6 +742,8 @@ struct hidl_array {
     using std_array_type = typename details::std_array<T, SIZE1, SIZES...>::type;
 
     hidl_array() = default;
+    hidl_array(const hidl_array&) noexcept = default;
+    hidl_array(hidl_array&&) noexcept = default;
 
     // Copies the data from source, using T::operator=(const T &).
     hidl_array(const T *source) {
@@ -752,6 +757,9 @@ struct hidl_array {
         details::accessor<T, SIZE1, SIZES...> modifier(mBuffer);
         modifier = array;
     }
+
+    hidl_array& operator=(const hidl_array&) noexcept = default;
+    hidl_array& operator=(hidl_array&&) noexcept = default;
 
     T *data() { return mBuffer; }
     const T *data() const { return mBuffer; }
@@ -805,6 +813,8 @@ struct hidl_array<T, SIZE1> {
     using std_array_type = typename details::std_array<T, SIZE1>::type;
 
     hidl_array() = default;
+    hidl_array(const hidl_array&) noexcept = default;
+    hidl_array(hidl_array&&) noexcept = default;
 
     // Copies the data from source, using T::operator=(const T &).
     hidl_array(const T *source) {
@@ -815,6 +825,9 @@ struct hidl_array<T, SIZE1> {
 
     // Copies the data from the given std::array, using T::operator=(const T &).
     hidl_array(const std_array_type &array) : hidl_array(array.data()) {}
+
+    hidl_array& operator=(const hidl_array&) noexcept = default;
+    hidl_array& operator=(hidl_array&&) noexcept = default;
 
     T *data() { return mBuffer; }
     const T *data() const { return mBuffer; }
