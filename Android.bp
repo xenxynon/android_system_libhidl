@@ -26,8 +26,12 @@ phony {
     name: "libhidl",
     required: [
         "libhidlbase",
-        "libhidltransport",
     ],
+}
+
+cc_library_headers {
+    name: "libhidl_gtest_helpers",
+    export_include_dirs: ["gtest_helpers"],
 }
 
 cc_test {
@@ -41,8 +45,6 @@ cc_test {
         "android.hidl.memory@1.0",
         "libbase",
         "libhidlbase",
-        "libhidltransport",
-        "libhwbinder",
         "liblog",
         "libutils",
         "libcutils",
@@ -97,6 +99,8 @@ cc_library {
     whole_static_libs: [
         "libhwbinder_pgo-impl-internal",
     ],
+
+    visibility: ["//system/libhwbinder:__subpackages__"],
 }
 
 // WARNING: deprecated
