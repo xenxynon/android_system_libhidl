@@ -382,13 +382,6 @@ struct PassthroughServiceManager : IServiceManager1_1 {
             } else if (!eachLib(handle, "SELF", sym)) {
                 return;
             }
-
-            const char* vtsRootPath = std::getenv("VTS_ROOT_PATH");
-            if (vtsRootPath && strlen(vtsRootPath) > 0) {
-                const std::string halLibraryPathVtsOverride =
-                    std::string(vtsRootPath) + HAL_LIBRARY_PATH_SYSTEM;
-                paths.insert(paths.begin(), halLibraryPathVtsOverride);
-            }
         }
 #endif
 
@@ -803,6 +796,7 @@ sp<::android::hidl::base::V1_0::IBase> getRawServiceInternal(const std::string& 
               "enable PRODUCT_ENFORCE_VINTF_MANIFEST on this device (this is also enabled by "
               "PRODUCT_FULL_TREBLE). PRODUCT_ENFORCE_VINTF_MANIFEST will ensure that no race "
               "condition is possible here.");
+        sleep(1);
     }
 
     for (int tries = 0; !getStub && (vintfHwbinder || vintfLegacy); tries++) {
