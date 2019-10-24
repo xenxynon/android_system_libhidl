@@ -16,7 +16,10 @@
 
 #define LOG_TAG "HidlServiceManagement"
 
+#ifdef __ANDROID__
 #include <android/dlext.h>
+#endif  // __ANDROID__
+
 #include <condition_variable>
 #include <dlfcn.h>
 #include <dirent.h>
@@ -43,7 +46,7 @@
 #include <android-base/strings.h>
 #include <hwbinder/IPCThreadState.h>
 #include <hwbinder/Parcel.h>
-#if !defined(__ANDROID_RECOVERY__)
+#if !defined(__ANDROID_RECOVERY__) && defined(__ANDROID__)
 #include <vndksupport/linker.h>
 #endif
 
@@ -55,8 +58,6 @@
 #define RE_PATH         RE_COMPONENT "(?:[.]" RE_COMPONENT ")*"
 static const std::regex gLibraryFileNamePattern("(" RE_PATH "@[0-9]+[.][0-9]+)-impl(.*?).so");
 
-using android::base::WaitForProperty;
-
 using ::android::hidl::base::V1_0::IBase;
 using IServiceManager1_0 = android::hidl::manager::V1_0::IServiceManager;
 using IServiceManager1_1 = android::hidl::manager::V1_1::IServiceManager;
@@ -66,8 +67,6 @@ using ::android::hidl::manager::V1_0::IServiceNotification;
 namespace android {
 namespace hardware {
 
-static const char* kHwServicemanagerReadyProperty = "hwservicemanager.ready";
-
 #if defined(__ANDROID_RECOVERY__)
 static constexpr bool kIsRecovery = true;
 #else
@@ -75,11 +74,18 @@ static constexpr bool kIsRecovery = false;
 #endif
 
 static void waitForHwServiceManager() {
+    // TODO(b/31559095): need bionic host so that we can use 'prop_info' returned
+    // from WaitForProperty
+#ifdef __ANDROID__
+    static const char* kHwServicemanagerReadyProperty = "hwservicemanager.ready";
+
     using std::literals::chrono_literals::operator""s;
 
+    using android::base::WaitForProperty;
     while (!WaitForProperty(kHwServicemanagerReadyProperty, "true", 1s)) {
         LOG(WARNING) << "Waited for hwservicemanager.ready for a second, waiting another...";
     }
+#endif  // __ANDROID__
 }
 
 static std::string binaryName() {
@@ -376,13 +382,6 @@ struct PassthroughServiceManager : IServiceManager1_1 {
             } else if (!eachLib(handle, "SELF", sym)) {
                 return;
             }
-
-            const char* vtsRootPath = std::getenv("VTS_ROOT_PATH");
-            if (vtsRootPath && strlen(vtsRootPath) > 0) {
-                const std::string halLibraryPathVtsOverride =
-                    std::string(vtsRootPath) + HAL_LIBRARY_PATH_SYSTEM;
-                paths.insert(paths.begin(), halLibraryPathVtsOverride);
-            }
         }
 #endif
 
@@ -395,7 +394,7 @@ struct PassthroughServiceManager : IServiceManager1_1 {
                 if (kIsRecovery || path == HAL_LIBRARY_PATH_SYSTEM) {
                     handle = dlopen(fullPath.c_str(), dlMode);
                 } else {
-#if !defined(__ANDROID_RECOVERY__)
+#if !defined(__ANDROID_RECOVERY__) && defined(__ANDROID__)
                     handle = android_load_sphal_library(fullPath.c_str(), dlMode);
 #endif
                 }
@@ -797,6 +796,7 @@ sp<::android::hidl::base::V1_0::IBase> getRawServiceInternal(const std::string& 
               "enable PRODUCT_ENFORCE_VINTF_MANIFEST on this device (this is also enabled by "
               "PRODUCT_FULL_TREBLE). PRODUCT_ENFORCE_VINTF_MANIFEST will ensure that no race "
               "condition is possible here.");
+        sleep(1);
     }
 
     for (int tries = 0; !getStub && (vintfHwbinder || vintfLegacy); tries++) {

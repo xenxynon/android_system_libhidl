@@ -36,6 +36,7 @@ cc_library_headers {
 
 cc_test {
     name: "libhidl_test",
+    host_supported: true,
     defaults: ["libhidl-defaults"],
     gtest: false,
     srcs: ["test_main.cpp"],
@@ -75,6 +76,7 @@ cc_defaults {
 cc_library {
     name: "libhidlbase",
     defaults: ["libhidlbase-combined-impl"],
+    host_supported: true,
     recovery_available: true,
     vendor_available: true,
     vndk: {
@@ -108,10 +110,10 @@ cc_library {
 // on libhidlbase instead.
 cc_library {
     name: "libhidltransport",
-    recovery_available: true,
     vendor_available: true,
-    vndk: {
-        enabled: true,
-        support_system_process: true,
-    },
+
+    visibility: [
+        "//device:__subpackages__",
+        "//vendor:__subpackages__",
+    ],
 }
