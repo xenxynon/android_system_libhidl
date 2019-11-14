@@ -113,7 +113,5 @@ cc_library {
     vendor_available: true,
 
 // TODO(b/144056694) Add back this visibility restriction.
-//    visibility: [
-//        "//vendor:__subpackages__",
-//    ],
+//    visibility: [":__subpackages__"],
 }
