@@ -18,6 +18,7 @@ cc_library_shared {
     generated_sources: ["android.hidl.base@1.0_genc++"],
     generated_headers: ["android.hidl.base@1.0_genc++_headers"],
     export_generated_headers: ["android.hidl.base@1.0_genc++_headers"],
+    system_ext_specific: true,
     vendor_available: true,
     shared_libs: [
         "libhidlbase",
