@@ -27,6 +27,10 @@ ifdef DEVICE_FRAMEWORK_MANIFEST_FILE
   FRAMEWORK_MANIFEST_INPUT_FILES += $(DEVICE_FRAMEWORK_MANIFEST_FILE)
 endif
 
+ifeq ($(BOARD_IS_AUTOMOTIVE), true)
+  FRAMEWORK_MANIFEST_INPUT_FILES += $(LOCAL_PATH)/automotive_manifest.xml
+endif
+
 # VNDK Version in device compatibility matrix and framework manifest
 ifeq ($(BOARD_VNDK_VERSION),current)
 VINTF_VNDK_VERSION := $(PLATFORM_VNDK_VERSION)
@@ -42,7 +46,7 @@ DEVICE_MATRIX_INPUT_FILE := $(LOCAL_PATH)/device_compatibility_matrix.default.xm
 endif
 
 include $(CLEAR_VARS)
-LOCAL_MODULE        := device_compatibility_matrix.xml
+LOCAL_MODULE        := vendor_compatibility_matrix.xml
 LOCAL_MODULE_STEM   := compatibility_matrix.xml
 LOCAL_MODULE_CLASS  := ETC
 LOCAL_MODULE_PATH   := $(TARGET_OUT_VENDOR)/etc/vintf
@@ -60,7 +64,6 @@ $(GEN): $(DEVICE_MATRIX_INPUT_FILE) $(HOST_OUT_EXECUTABLES)/assemble_vintf
 
 LOCAL_PREBUILT_MODULE_FILE := $(GEN)
 include $(BUILD_PREBUILT)
-BUILT_VENDOR_MATRIX := $(LOCAL_BUILT_MODULE)
 
 # System Manifest
 include $(CLEAR_VARS)
@@ -82,7 +85,6 @@ $(GEN): $(FRAMEWORK_MANIFEST_INPUT_FILES) $(HOST_OUT_EXECUTABLES)/assemble_vintf
 
 LOCAL_PREBUILT_MODULE_FILE := $(GEN)
 include $(BUILD_PREBUILT)
-BUILT_SYSTEM_MANIFEST := $(LOCAL_BUILT_MODULE)
 
 # Product Manifest
 ifneq ($(PRODUCT_MANIFEST_FILES),)
