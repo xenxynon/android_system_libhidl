@@ -110,14 +110,19 @@ cc_library {
 }
 
 // WARNING: deprecated
-// This library is no longer required, and dependencies should be taken
-// on libhidlbase instead.
+// This library is no longer required, and dependencies should be taken on libhidlbase instead.
+// This is automatically removed by bpfix. Once there are no makefiles, fixes can be automatically applied, and this can be removed.
 cc_library {
     name: "libhidltransport",
     vendor_available: true,
 
-// TODO(b/144056694) Add back this visibility restriction.
-//    visibility: [":__subpackages__"],
+    // TODO(b/144056694) Add back the subpackages visibility restriction.
+    // visibility: [
+        // ":__subpackages__",
+        // "//hardware:__subpackages__",
+        // "//test/sts:__subpackages__",
+        // "//vendor:__subpackages__",
+    // ],
 }
 
 cc_defaults {
