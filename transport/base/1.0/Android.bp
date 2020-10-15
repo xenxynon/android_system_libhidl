@@ -10,6 +10,10 @@ hidl_interface {
         "IBase.hal",
     ],
     gen_java: true,
+    apex_available: [
+        "//apex_available:anyapex",
+        "//apex_available:platform",
+    ],
 }
 
 cc_library_shared {
